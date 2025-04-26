@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>pDASH Peer</title>
+  <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+</head>
+<body>
+  <h2>Peer DASH Player</h2>
+  <video id="videoPlayer" controls autoplay width="640"></video>
+  <pre id="log"></pre>
+  <script>
+    const peerIP = "localhost:9001"; // change per peer
+    const cached = new Set();
+    let player;
+
+    function initPlayer() {
+      player = dashjs.MediaPlayer().create();
+      player.updateSettings({
+        streaming: { abr: { autoSwitchBitrate: { video: true } } }
+      });
+
+      player.initialize(
+        document.querySelector("#videoPlayer"),
+        "http://localhost:4000/manifest.mpd",
+        true
+      );
+
+      player.on(dashjs.MediaPlayer.events.FRAGMENT_LOADING_COMPLETED, async function(e) {
+        const url = e.request.url;
+        const segment = url.split("/").pop();
+        const source = url.includes("localhost:8000") ? "[CDN]" : "[PEER]";
+
+        const log = document.getElementById("log");
+        log.textContent += `\n${source} ${segment}`;
+
+        if (!segment || cached.has(segment)) return;
+        cached.add(segment);
+
+        try {
+          const res = await fetch(url);
+          const blob = await res.blob();
+          const buffer = await blob.arrayBuffer();
+          const uint8 = new Uint8Array(buffer);
+
+          // Avoid btoa overflow by chunking
+          let binary = "";
+          for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
+          const base64 = btoa(binary);
+
+          await fetch("http://" + peerIP + "/cache", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: segment, data: base64 })
+          });
+
+          await fetch("http://localhost:4000/logSegment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ peerIP, segment })
+          });
+        } catch (err) {
+          console.error("Caching error:", err);
+        }
+      });
+    }
+
+    initPlayer();
+  </script>
+</body>
+</html>
