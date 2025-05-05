@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>pDASH Peer</title>
+  <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+</head>
+<body>
+  <h2>Peer DASH Player</h2>
+  <video id="videoPlayer" controls autoplay width="640"></video>
+  <pre id="log"></pre>
+  <h3>QoE Metrics:</h3>
+  <pre id="metrics"></pre>
+
+  <script>
+    const peerIP = "localhost:9001"; // change per peer
+    const cached = new Set();
+    let player;
+    let startLoadTime = performance.now();
+    let startupDelay = 0;
+    let rebuffers = 0;
+    let totalRebufferTime = 0;
+    let lastBufferEmptyTime = 0;
+
+    let cdnChunks = 0, peerChunks = 0;
+    let cdnBytes = 0, peerBytes = 0;
+
+    function initPlayer() {
+      player = dashjs.MediaPlayer().create();
+      player.updateSettings({
+        streaming: { abr: { autoSwitchBitrate: { video: true } } }
+      });
+
+      player.initialize(
+        document.querySelector("#videoPlayer"),
+        "http://localhost:4000/manifest.mpd",
+        true
+      );
+
+      player.on(dashjs.MediaPlayer.events.PLAYBACK_STARTED, () => {
+        startupDelay = (performance.now() - startLoadTime) / 1000;
+        console.log(`Startup delay: ${startupDelay}s`);
+      });
+
+      player.on(dashjs.MediaPlayer.events.BUFFER_EMPTY, () => {
+        lastBufferEmptyTime = performance.now();
+      });
+
+      player.on(dashjs.MediaPlayer.events.BUFFER_LOADED, () => {
+        if (lastBufferEmptyTime) {
+          rebuffers++;
+          totalRebufferTime += (performance.now() - lastBufferEmptyTime) / 1000;
+          lastBufferEmptyTime = 0;
+        }
+      });
+
+      player.on(dashjs.MediaPlayer.events.FRAGMENT_LOADING_COMPLETED, async function(e) {
+        const url = e.request.url;
+        const segment = url.split("/").pop();
+        const source = url.includes("localhost:8000") ? "[CDN]" : "[PEER]";
+
+        const log = document.getElementById("log");
+        log.textContent += `\n${source} ${segment}`;
+
+        const sizeBytes = e.request.bytesTotal || 0; // <-- Corrected here
+        if (source === "[CDN]") {
+          cdnChunks++;
+          cdnBytes += sizeBytes;
+        } else {
+          peerChunks++;
+          peerBytes += sizeBytes;
+        }
+
+        if (!segment || cached.has(segment)) return;
+        cached.add(segment);
+
+        try {
+          const res = await fetch(url);
+          const blob = await res.blob();
+          const buffer = await blob.arrayBuffer();
+          const uint8 = new Uint8Array(buffer);
+
+          let binary = "";
+          for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
+          const base64 = btoa(binary);
+
+          await fetch("http://" + peerIP + "/cache", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: segment, data: base64 })
+          });
+
+          await fetch("http://localhost:4000/logSegment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ peerIP, segment })
+          });
+        } catch (err) {
+          console.error("Caching error:", err);
+        }
+      });
+
+      player.on(dashjs.MediaPlayer.events.PLAYBACK_ENDED, () => {
+        showMetrics();
+      });
+    }
+
+    function showMetrics() {
+      const metricsDiv = document.getElementById("metrics");
+
+      const totalBytes = cdnBytes + peerBytes;
+      const totalBits = totalBytes * 8;
+      const durationSec = player.duration(); // keep your original even if it's wrong
+      const bitrateKbps = durationSec > 0 ? (totalBits / durationSec) / 1000 : 0;
+
+      metricsDiv.textContent = `
+    Startup Delay: ${startupDelay.toFixed(2)} seconds
+    Total Rebuffer Events: ${rebuffers}
+    Total Rebuffer Time: ${totalRebufferTime.toFixed(2)} seconds
+
+    Chunks from CDN: ${cdnChunks}
+    Chunks from Peer: ${peerChunks}
+
+    Data from CDN: ${(cdnBytes / 1024 / 1024).toFixed(2)} MB
+    Data from Peers: ${(peerBytes / 1024 / 1024).toFixed(2)} MB
+
+    Average Bitrate (calculated): ${bitrateKbps.toFixed(2)} kbps
+      `;
+
+      fetch("http://localhost:4000/uploadMetrics", {  // <-- ✅ only this changed
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          numPeers: parseInt(new URLSearchParams(window.location.search).get('peers') || '1'),
+          startupDelay,
+          totalRebufferTime,
+          cdnBytes,
+          peerBytes,
+          avgBitrate: bitrateKbps
+        })
+      });
+    }
+
+    initPlayer();
+  </script>
+</body>
+</html>

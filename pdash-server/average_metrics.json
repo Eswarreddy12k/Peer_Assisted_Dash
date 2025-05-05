@@ -1,0 +1,11 @@
+{
+  "averageMetrics": {
+    "numPeers": 30,
+    "startupDelay": 0.5269000000019867,
+    "totalRebufferTime": 0,
+    "cdnBytes": 7238727.533333333,
+    "peerBytes": 0,
+    "avgBitrate": 1929.5099854394205
+  },
+  "metricsCount": 30
+}

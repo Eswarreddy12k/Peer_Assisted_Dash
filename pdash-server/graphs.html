@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>QoE Graphs</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <h2>Average Metrics Over Peers</h2>
+  <canvas id="qoeChart" width="800" height="400"></canvas>
+
+  <script>
+    async function drawChart() {
+      const res = await fetch('http://localhost:4000/averageMetrics');
+      const data = await res.json();
+      const metrics = data.averageMetrics;
+
+      const labels = [
+        'Startup Delay (s)',
+        'Rebuffer Events',
+        'Rebuffer Time (s)',
+        'CDN Chunks',
+        'Peer Chunks',
+        'CDN Data (MB)',
+        'Peer Data (MB)',
+        'Average Bitrate (kbps)'
+      ];
+
+      const values = [
+        metrics.startupDelay,
+        metrics.rebufferCount,
+        metrics.totalRebufferTime,
+        metrics.cdnChunks,
+        metrics.peerChunks,
+        metrics.cdnDataMB,
+        metrics.peerDataMB,
+        metrics.averageBitrate
+      ];
+
+      const ctx = document.getElementById('qoeChart').getContext('2d');
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Average Values',
+            data: values,
+            borderWidth: 1
+          }]
+        },
+        options: {
+          scales: {
+            y: { beginAtZero: true }
+          }
+        }
+      });
+    }
+
+    drawChart();
+  </script>
+</body>
+</html>

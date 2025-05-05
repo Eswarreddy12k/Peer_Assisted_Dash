@@ -7,6 +7,7 @@ const fs = require("fs");
 
 const app = express();
 app.use(cors());
+app.use(express.static(__dirname));
 app.use(express.json());
 
 const peerSegmentMap = {};
@@ -57,6 +58,45 @@ app.get("/manifest.mpd", async (req, res) => {
 app.get("/peerStats", (req, res) => {
   res.json(peerStats);
 });
+
+const path = require('path');
+
+let averageMetrics = null;
+let metricsCount = 0;
+
+// New API: receive metrics from peers
+app.post("/uploadMetrics", (req, res) => {
+  const newMetrics = req.body;
+
+  if (!averageMetrics) {
+    // First data coming
+    averageMetrics = { ...newMetrics };
+    metricsCount = 1;
+  } else {
+    metricsCount++;
+    for (const key in newMetrics) {
+      averageMetrics[key] = (averageMetrics[key] * (metricsCount - 1) + newMetrics[key]) / metricsCount;
+    }
+  }
+
+  // Save to a file
+  fs.writeFileSync(path.join(__dirname, 'average_metrics.json'), JSON.stringify({
+    averageMetrics,
+    metricsCount
+  }, null, 2));
+
+  console.log(`[METRICS] Updated average over ${metricsCount} uploads`);
+  res.sendStatus(200);
+});
+
+// New API: serve average metrics
+app.get("/averageMetrics", (req, res) => {
+  if (!averageMetrics) {
+    return res.status(404).send("No metrics yet");
+  }
+  res.json({ averageMetrics, metricsCount });
+});
+
 
 
 // Share peerStats for use in generateMPD
